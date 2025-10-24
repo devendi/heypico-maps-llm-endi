@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maps Places Lookup</title>
+  <style>
+    :root { color-scheme: light dark; font-family: "Inter","Helvetica Neue",Arial,sans-serif; }
+    body {
+      margin: 0; padding: 2rem 1rem 4rem; min-height: 100vh; display: flex; justify-content: center;
+      background: radial-gradient(circle at top, rgba(64,132,255,.12), transparent 55%);
+    }
+    main {
+      width: min(900px, 100%); background: rgba(255,255,255,.85); backdrop-filter: blur(6px);
+      border-radius: 20px; border: 1px solid rgba(255,255,255,.6); padding: 2rem;
+      box-shadow: 0 30px 60px rgba(15,23,42,.12);
+    }
+    h1 { margin-top: 0; font-weight: 700; text-align: center; letter-spacing: -.02em; }
+    form { display: grid; gap: 1rem; margin-bottom: 1.25rem; }
+    .field { display: flex; flex-direction: column; gap: .35rem; }
+    label { font-size: .9rem; font-weight: 600; color: rgba(15,23,42,.75); }
+    input[type="text"], input[type="number"]{
+      padding: .65rem .75rem; border-radius: 10px; border: 1px solid rgba(15,23,42,.12); font-size: 1rem;
+      transition: border-color 120ms ease;
+    }
+    input[type="text"]:focus, input[type="number"]:focus{
+      outline: none; border-color: rgba(64,132,255,.6); box-shadow: 0 0 0 3px rgba(64,132,255,.15);
+    }
+    button[type="submit"]{
+      justify-self: flex-end; padding: .75rem 1.5rem; border-radius: 999px; border: none; font-weight: 600;
+      font-size: 1rem; color: #fff; background: linear-gradient(120deg,#4169e1,#5b8bff);
+      cursor: pointer; transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+    button[type="submit"]:hover{ transform: translateY(-1px); box-shadow: 0 12px 24px rgba(64,132,255,.25); }
+    .message{ padding: .85rem 1rem; border-radius: 12px; background: rgba(64,132,255,.08); color: rgba(15,23,42,.8); }
+    .results{ display: grid; gap: 1.25rem; }
+    .card{
+      padding: 1.1rem; border-radius: 14px; border: 1px solid rgba(15,23,42,.08);
+      box-shadow: 0 18px 36px rgba(15,23,42,.08); background: #fff; display: grid; gap: .75rem;
+    }
+    .card h2{ margin: 0; font-size: 1.15rem; }
+    .info{ color: rgba(15,23,42,.7); font-size: .95rem; }
+    .rating{ font-weight: 600; }
+    .map-frame{ position: relative; width: 100%; padding-top: 56.25%; border-radius: 14px; overflow: hidden; background: rgba(15,23,42,.05); }
+    .map-frame iframe{ position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .actions{ display: flex; justify-content: flex-end; }
+    .map-button{
+      padding: .6rem 1.2rem; border-radius: 10px; border: 1px solid rgba(64,132,255,.2);
+      background: rgba(64,132,255,.1); color: #1d4ed8; font-weight: 600; text-decoration: none;
+      display: inline-flex; align-items: center; gap: .35rem;
+    }
+    .map-button:hover{ background: rgba(64,132,255,.18); }
+    @media (max-width: 600px){ main{ padding: 1.5rem; } button[type="submit"]{ width: 100%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Maps Places Lookup</h1>
+
+    <form id="search-form">
+      <div class="field">
+        <label for="query">Search query <span aria-hidden="true">*</span></label>
+        <input id="query" name="query" type="text" placeholder="e.g. coffee shop" required />
+      </div>
+      <div class="field">
+        <label for="latitude">Latitude (optional)</label>
+        <input id="latitude" name="lat" type="number" step="any" placeholder="-6.200" />
+      </div>
+      <div class="field">
+        <label for="longitude">Longitude (optional)</label>
+        <input id="longitude" name="lng" type="number" step="any" placeholder="106.816" />
+      </div>
+      <button type="submit">Search Places</button>
+    </form>
+
+    <div id="feedback" class="message" hidden>Enter a query to begin.</div>
+    <section id="results" class="results" aria-live="polite"></section>
+  </main>
+
+  <script>
+    const API_BASE = "http://127.0.0.1:8000";
+
+    const form = document.getElementById('search-form');
+    const resultsContainer = document.getElementById('results');
+    const feedback = document.getElementById('feedback');
+
+    const setFeedback = (msg, show = true) => {
+      feedback.textContent = msg;
+      feedback.hidden = !show;
+    };
+
+    function createResultCard(place, embedUrl = null, directionsUrl = null) {
+      const card = document.createElement('article');
+      card.className = 'card';
+
+      const title = document.createElement('h2');
+      title.textContent = place.name || 'Unnamed place';
+      card.appendChild(title);
+
+      if (place.address) {
+        const address = document.createElement('p');
+        address.className = 'info';
+        address.textContent = place.address;
+        card.appendChild(address);
+      }
+
+      if (place.rating != null) {
+        const rating = document.createElement('p');
+        rating.className = 'info rating';
+        rating.textContent = `Rating: ${place.rating}`;
+        card.appendChild(rating);
+      }
+
+      if (embedUrl) {
+        const frameWrapper = document.createElement('div');
+        frameWrapper.className = 'map-frame';
+        const iframe = document.createElement('iframe');
+        iframe.src = embedUrl;
+        iframe.loading = 'lazy';
+        iframe.referrerPolicy = 'no-referrer-when-downgrade';
+        frameWrapper.appendChild(iframe);
+        card.appendChild(frameWrapper);
+      }
+
+      if (directionsUrl) {
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+        const link = document.createElement('a');
+        link.className = 'map-button';
+        link.href = directionsUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'Open in Maps';
+        actions.appendChild(link);
+        card.appendChild(actions);
+      }
+
+      return card;
+    }
+
+    async function fetchPlaces(params) {
+      const url = new URL(`${API_BASE}/api/places`);
+      url.search = new URLSearchParams(params).toString();
+      const res = await fetch(url, { method: 'GET' });
+      if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+      return res.json();
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const query = (fd.get('query') || '').trim();
+      const lat = (fd.get('lat') || '').trim();
+      const lng = (fd.get('lng') || '').trim();
+
+      if (!query) { setFeedback('Query is required.'); return; }
+
+      const params = { query };
+      if (lat) params.lat = lat;
+      if (lng) params.lng = lng;
+
+      setFeedback('Searching for places…');
+      resultsContainer.innerHTML = '';
+
+      try {
+        const data = await fetchPlaces(params);
+        const places = Array.isArray(data?.places) ? data.places.slice(0, 3) : [];
+
+        if (places.length === 0) {
+          setFeedback('No results found for this search.');
+          return;
+        }
+
+        setFeedback('', false);
+
+        places.forEach((p, idx) => {
+          const useEmbed = idx === 0 ? (data.embedUrl || null) : null;
+          const useDir   = idx === 0 ? (data.directionsUrl || null) : null;
+          resultsContainer.appendChild(createResultCard(p, useEmbed, useDir));
+        });
+      } catch (err) {
+        console.error(err);
+        setFeedback('Something went wrong while fetching places. Please try again.');
+      }
+    });
+  </script>
+</body>
+</html>
