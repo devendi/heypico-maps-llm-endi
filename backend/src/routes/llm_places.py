@@ -1,13 +1,11 @@
 """LLM assisted place search endpoint."""
-from __future__ import annotations
-
 import logging
 import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
 from diskcache import Cache
-from fastapi import APIRouter, HTTPException, Request, Body
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -95,7 +93,7 @@ def _maps_url(place_id: str) -> str:
 @limiter.limit(f"{RATE_LIMIT}/minute")
 async def llm_places_endpoint(
     request: Request,
-    payload: LLMPlacesRequest = Body(...),
+    payload: LLMPlacesRequest,
 ) -> LLMPlacesResponse:
     intent = extract_intent_from_prompt(payload.prompt)
     key = _cache_key(intent)
