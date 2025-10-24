@@ -11,8 +11,8 @@ from slowapi.util import get_remote_address
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .routes.directions import router as directions_router
-from .routes.places import router as places_router
+from src.routes.places import router as places_router
+from src.routes.directions import router as directions_router
 
 load_dotenv()
 
@@ -36,7 +36,7 @@ def _rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JS
 
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware, limiter=limiter)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -48,11 +48,9 @@ app.add_middleware(
 app.include_router(places_router)
 app.include_router(directions_router)
 
-
 @app.get("/api/health")
 @limiter.limit("60/minute")
-async def health() -> Dict[str, str]:
+async def health(request: Request) -> Dict[str, str]:
     return {"status": "ok"}
-
 
 __all__ = ["app", "limiter"]
