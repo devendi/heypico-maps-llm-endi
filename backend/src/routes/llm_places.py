@@ -11,7 +11,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from ..services.llm_service import extract_intent_from_prompt
-from ..services.maps_client import MapsAPIError, text_search
+from ..services.maps_client import MapsAPIError, embed_url as build_embed_url, text_search
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,25 @@ def _cache_key(intent: Dict[str, Any]) -> str:
         str(intent.get("radius_m", "")),
     ])
 
-def _build_embed_url(intent: Dict[str, Any]) -> str:
+def _build_embed_url(intent: Dict[str, Any], place: Optional[Dict[str, Any]]) -> str:
     search = f"{intent['query']} near {intent['location']}".strip()
-    return "https://www.google.com/maps/embed/v1/search?key=REDACTED&q=" + quote_plus(search)
+
+    if place:
+        lat = place.get("lat")
+        lng = place.get("lng")
+        name = place.get("name") or intent.get("query") or search or ""
+
+        if lat is not None and lng is not None:
+            try:
+                return build_embed_url(float(lat), float(lng), q=str(name))
+            except (TypeError, ValueError):
+                # Fallback to the search URL below if coordinates are malformed
+                pass
+
+    if not search:
+        return "https://www.google.com/maps"
+
+    return "https://maps.google.com/maps?output=embed&q=" + quote_plus(search)
 
 def _build_directions_url(intent: Dict[str, Any], place: Dict[str, Any]) -> Optional[str]:
     destination = None
@@ -128,7 +144,8 @@ async def llm_places_endpoint(
             "maps_url": _maps_url(place_id),
         })
 
-    embed = _build_embed_url(intent)
+    first_place = places[0] if places else None
+    embed = _build_embed_url(intent, first_place)
     directions = _build_directions_url(intent, places[0]) if places else None
 
     response = LLMPlacesResponse(
