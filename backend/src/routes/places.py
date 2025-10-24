@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from importlib import import_module, util
 from typing import Any, Dict, List, Optional
 
@@ -14,7 +16,8 @@ from slowapi.util import get_remote_address
 from ..services.maps_client import MapsAPIError, embed_url, text_search
 
 # ===== Config & cache =====
-CACHE_TTL_SECONDS = 600
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "600") or "600")
+RATE_LIMIT = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30") or "30")
 CACHE_PATH = "./.cache"
 cache = Cache(CACHE_PATH)
 
@@ -45,7 +48,7 @@ def _load_limiter() -> Limiter:
         if isinstance(maybe_limiter, Limiter):
             limiter_instance = maybe_limiter
     if limiter_instance is None:
-        limiter_instance = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+        limiter_instance = Limiter(key_func=get_remote_address, default_limits=[f"{RATE_LIMIT}/minute"])
     return limiter_instance
 
 
@@ -62,7 +65,7 @@ def _cache_key(query: str, lat: Optional[float], lng: Optional[float]) -> str:
 
 
 @router.get("/places", response_model=PlacesResponse)
-@limiter.limit("60/minute")
+@limiter.limit(f"{RATE_LIMIT}/minute")
 async def get_places(
     request: Request,
     query: str = Query(..., min_length=2, description="Search query"),

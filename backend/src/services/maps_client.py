@@ -9,13 +9,20 @@ class MapsAPIError(Exception):
 
 
 def _get_api_key() -> str:
-    api_key = os.environ.get("GOOGLE_MAPS_KEY", "").strip()
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("GOOGLE_MAPS_KEY environment variable is not set")
+        api_key = os.environ.get("GOOGLE_MAPS_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GOOGLE_MAPS_API_KEY environment variable is not set")
     return api_key
 
 
-async def text_search(query: str, lat: float | None = None, lng: float | None = None) -> dict:
+async def text_search(
+    query: str,
+    lat: float | None = None,
+    lng: float | None = None,
+    radius_m: int | None = None,
+) -> dict:
     if (lat is None) != (lng is None):
         raise ValueError("Both lat and lng must be provided together")
 
@@ -27,7 +34,10 @@ async def text_search(query: str, lat: float | None = None, lng: float | None = 
     }
     if lat is not None and lng is not None:
         params["location"] = f"{lat},{lng}"
-        params["radius"] = "5000"
+        if radius_m:
+            params["radius"] = str(radius_m)
+        else:
+            params["radius"] = "5000"
 
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(
@@ -96,8 +106,13 @@ async def directions(origin: str, dest: str) -> dict:
 
 
 def embed_url(lat: float, lng: float, q: str) -> str:
+    """Return an embeddable map URL without exposing the API key."""
     encoded_query = quote_plus(q)
+    # Format the query using the ``loc:`` prefix so that the iframe zooms to the
+    # exact coordinates while still displaying the place name. This variant uses
+    # the public maps embed endpoint, which works without an API key and avoids
+    # triggering "invalid key" errors in the demo frontend.
     return (
-        "https://www.google.com/maps/embed/v1/search?"
-        f"key=REDACTED&q={encoded_query}&center={lat},{lng}&zoom=14"
+        "https://maps.google.com/maps?"
+        f"q={encoded_query}+loc:{lat},{lng}&hl=id&z=15&output=embed"
     )
