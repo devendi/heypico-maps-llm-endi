@@ -1,3 +1,5 @@
+# backend/src/routes/places.py
+
 from __future__ import annotations
 
 from importlib import import_module, util
@@ -11,12 +13,12 @@ from slowapi.util import get_remote_address
 
 from ..services.maps_client import MapsAPIError, embed_url, text_search
 
+# ===== Config & cache =====
 CACHE_TTL_SECONDS = 600
 CACHE_PATH = "./.cache"
-
 cache = Cache(CACHE_PATH)
 
-
+# ===== Models =====
 class Place(BaseModel):
     name: str
     address: str
@@ -33,6 +35,7 @@ class PlacesResponse(BaseModel):
     directionsUrl: Optional[str] = None
 
 
+# ===== Limiter loader (avoid hard import cycle) =====
 def _load_limiter() -> Limiter:
     limiter_instance: Optional[Limiter] = None
     main_spec = util.find_spec("..main", package=__package__)
@@ -48,57 +51,14 @@ def _load_limiter() -> Limiter:
 
 limiter = _load_limiter()
 
+# ===== Router =====
 router = APIRouter(prefix="/api", tags=["places"])
-
-
-def _float_or_none(value: Any) -> Optional[float]:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _normalize_place(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    location: Dict[str, Any] = {}
-    if "lat" in raw and "lng" in raw:
-        location = {"lat": raw.get("lat"), "lng": raw.get("lng")}
-    elif "location" in raw:
-        location = raw.get("location") or {}
-    else:
-        geometry = raw.get("geometry") or {}
-        location = geometry.get("location") or {}
-
-    lat_value = _float_or_none(location.get("lat"))
-    lng_value = _float_or_none(location.get("lng"))
-    if lat_value is None or lng_value is None:
-        return None
-
-    rating_value = _float_or_none(raw.get("rating"))
-
-    address_value = raw.get("formatted_address") or raw.get("address") or ""
-
-    place_id_value = raw.get("place_id") or raw.get("id")
-    if not place_id_value:
-        return None
-
-    name_value = raw.get("name")
-    if not name_value:
-        return None
-
-    return {
-        "name": name_value,
-        "address": address_value,
-        "lat": lat_value,
-        "lng": lng_value,
-        "place_id": place_id_value,
-        "rating": rating_value,
-    }
 
 
 def _cache_key(query: str, lat: Optional[float], lng: Optional[float]) -> str:
     lat_part = "" if lat is None else f"{lat:.6f}"
     lng_part = "" if lng is None else f"{lng:.6f}"
-    return f"{query}|{lat_part}|{lng_part}"
+    return f"places|{query.strip()}|{lat_part}|{lng_part}"
 
 
 @router.get("/places", response_model=PlacesResponse)
@@ -109,50 +69,50 @@ async def get_places(
     lat: Optional[float] = Query(None, description="Latitude of the search origin"),
     lng: Optional[float] = Query(None, description="Longitude of the search origin"),
 ) -> PlacesResponse:
-    cache_key = _cache_key(query, lat, lng)
-    cached_places = cache.get(cache_key)
+    key = _cache_key(query, lat, lng)
+    cached = cache.get(key)
+    if cached:
+        # cached is dict produced by model_dump()
+        return PlacesResponse(**cached)
 
-    places_data: List[Dict[str, Any]]
-    if cached_places is not None:
-        places_data = cached_places
+    try:
+        # text_search returns dict {"query": str, "places": [ {name, address, lat, lng, place_id, rating?}, ... ]}
+        result = await text_search(query.strip(), lat=lat, lng=lng)
+    except MapsAPIError as e:
+        raise HTTPException(status_code=502, detail=f"maps_api_error: {e}") from e
+    except Exception:
+        raise HTTPException(status_code=500, detail="internal_error")
+
+    if isinstance(result, dict):
+        items: List[Dict[str, Any]] = [p for p in result.get("places", []) if isinstance(p, dict)]
+    elif isinstance(result, list):
+        # fallback shape if client returns list directly
+        items = [p for p in result if isinstance(p, dict)]
     else:
-        try:
-            raw_places = text_search(query, lat=lat, lng=lng)
-        except MapsAPIError as exc:  # pragma: no cover - depends on external API
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        except Exception as exc:  # pragma: no cover - defensive programming
-            raise HTTPException(status_code=500, detail="internal_error") from exc
+        items = []
 
-        normalized_places: List[Dict[str, Any]] = []
-        if isinstance(raw_places, list):
-            for item in raw_places:
-                if not isinstance(item, dict):
-                    continue
-                normalized = _normalize_place(item)
-                if normalized is not None:
-                    normalized_places.append(normalized)
-        places_data = normalized_places
-        cache.set(cache_key, places_data, expire=CACHE_TTL_SECONDS)
-
-    places_models = [Place(**place) for place in places_data]
+    top = items[:3]
+    places_models = [Place(**p) for p in top]
 
     embed_value: Optional[str] = None
     directions_value: Optional[str] = None
-
     if places_models:
-        first_place = places_models[0]
-        embed_value = embed_url(first_place.lat, first_place.lng, q=first_place.name)
-
+        first = places_models[0]
+        embed_value = embed_url(first.lat, first.lng, q=first.name)
         if lat is not None and lng is not None:
             directions_value = (
                 "https://www.google.com/maps/dir/?api=1"
                 f"&origin={lat},{lng}"
-                f"&destination={first_place.lat},{first_place.lng}"
+                f"&destination={first.lat},{first.lng}"
             )
 
-    return PlacesResponse(
-        query=query,
+    response = PlacesResponse(
+        query=query.strip(),
         places=places_models,
         embedUrl=embed_value,
         directionsUrl=directions_value,
     )
+
+    # store as plain dict for cache
+    cache.set(key, response.model_dump(), expire=CACHE_TTL_SECONDS)
+    return response
