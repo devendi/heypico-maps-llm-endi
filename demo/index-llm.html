@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maps LLM Places Lookup</title>
+  <style>
+    :root { color-scheme: light dark; font-family: "Inter","Helvetica Neue",Arial,sans-serif; }
+    body {
+      margin: 0; padding: 2rem 1rem 4rem; min-height: 100vh; display: flex; justify-content: center;
+      background: radial-gradient(circle at top, rgba(99,102,241,.18), transparent 55%);
+    }
+    main {
+      width: min(900px, 100%); background: rgba(255,255,255,.85); backdrop-filter: blur(6px);
+      border-radius: 20px; border: 1px solid rgba(255,255,255,.6); padding: 2rem;
+      box-shadow: 0 30px 60px rgba(15,23,42,.12);
+    }
+    h1 { margin-top: 0; font-weight: 700; text-align: center; letter-spacing: -.02em; }
+    form { display: grid; gap: 1rem; margin-bottom: 1.25rem; }
+    textarea {
+      min-height: 120px; padding: .75rem .85rem; border-radius: 12px; font-size: 1rem;
+      border: 1px solid rgba(15,23,42,.12); resize: vertical;
+      transition: border-color 120ms ease;
+    }
+    textarea:focus {
+      outline: none; border-color: rgba(79,70,229,.6); box-shadow: 0 0 0 3px rgba(99,102,241,.18);
+    }
+    button[type="submit"]{
+      justify-self: flex-end; padding: .75rem 1.6rem; border-radius: 999px; border: none; font-weight: 600;
+      font-size: 1rem; color: #fff; background: linear-gradient(120deg,#4f46e5,#6366f1);
+      cursor: pointer; transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+    button[type="submit"]:hover{ transform: translateY(-1px); box-shadow: 0 12px 24px rgba(99,102,241,.28); }
+    .message{ padding: .85rem 1rem; border-radius: 12px; background: rgba(99,102,241,.08); color: rgba(15,23,42,.8); }
+    .intent {
+      border-radius: 14px; border: 1px solid rgba(79,70,229,.16); background: rgba(99,102,241,.08);
+      padding: 1rem; margin-bottom: 1.25rem; display: grid; gap: .35rem; font-size: .95rem;
+    }
+    .intent strong { font-weight: 600; }
+    .results{ display: grid; gap: 1.25rem; }
+    .card{
+      padding: 1.1rem; border-radius: 14px; border: 1px solid rgba(15,23,42,.08);
+      box-shadow: 0 18px 36px rgba(15,23,42,.08); background: #fff; display: grid; gap: .75rem;
+    }
+    .card h2{ margin: 0; font-size: 1.15rem; }
+    .info{ color: rgba(15,23,42,.7); font-size: .95rem; }
+    .map-frame{ position: relative; width: 100%; padding-top: 56.25%; border-radius: 14px; overflow: hidden; background: rgba(15,23,42,.05); }
+    .map-frame iframe{ position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .actions{ display: flex; justify-content: flex-end; }
+    .map-button{
+      padding: .6rem 1.2rem; border-radius: 10px; border: 1px solid rgba(99,102,241,.22);
+      background: rgba(99,102,241,.12); color: #4338ca; font-weight: 600; text-decoration: none;
+      display: inline-flex; align-items: center; gap: .35rem;
+    }
+    .map-button:hover{ background: rgba(99,102,241,.18); }
+    @media (max-width: 600px){ main{ padding: 1.5rem; } button[type="submit"]{ width: 100%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>LLM-assisted Maps Search</h1>
+
+    <form id="prompt-form">
+      <label for="prompt">
+        Describe what you're looking for
+        <span aria-hidden="true">*</span>
+      </label>
+      <textarea id="prompt" name="prompt" placeholder="Find sushi restaurants near Senopati with good ratings" required></textarea>
+      <button type="submit">Ask LLM</button>
+    </form>
+
+    <div id="feedback" class="message" hidden>Enter a prompt to begin.</div>
+    <section id="intent" class="intent" hidden></section>
+    <section id="results" class="results" aria-live="polite"></section>
+  </main>
+
+  <script>
+    const API_BASE = "http://127.0.0.1:8000";
+
+    const form = document.getElementById('prompt-form');
+    const promptField = document.getElementById('prompt');
+    const resultsContainer = document.getElementById('results');
+    const feedback = document.getElementById('feedback');
+    const intentBox = document.getElementById('intent');
+
+    const setFeedback = (msg, show = true) => {
+      feedback.textContent = msg;
+      feedback.hidden = !show;
+    };
+
+    const showIntent = (intent) => {
+      if (!intent || typeof intent !== 'object') {
+        intentBox.hidden = true;
+        intentBox.innerHTML = '';
+        return;
+      }
+      intentBox.hidden = false;
+      intentBox.innerHTML = `
+        <div><strong>Query:</strong> ${intent.query || '—'}</div>
+        <div><strong>Location:</strong> ${intent.location || '—'}</div>
+        <div><strong>Radius:</strong> ${intent.radius_m ? intent.radius_m + ' m' : '—'}</div>
+      `;
+    };
+
+    function createResultCard(place, embedUrl = null, directionsUrl = null) {
+      const card = document.createElement('article');
+      card.className = 'card';
+
+      const title = document.createElement('h2');
+      title.textContent = place.name || 'Unnamed place';
+      card.appendChild(title);
+
+      if (place.address) {
+        const address = document.createElement('p');
+        address.className = 'info';
+        address.textContent = place.address;
+        card.appendChild(address);
+      }
+
+      if (embedUrl) {
+        const frameWrapper = document.createElement('div');
+        frameWrapper.className = 'map-frame';
+        const iframe = document.createElement('iframe');
+        iframe.src = embedUrl;
+        iframe.loading = 'lazy';
+        iframe.referrerPolicy = 'no-referrer-when-downgrade';
+        frameWrapper.appendChild(iframe);
+        card.appendChild(frameWrapper);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      if (directionsUrl) {
+        const directionsLink = document.createElement('a');
+        directionsLink.className = 'map-button';
+        directionsLink.href = directionsUrl;
+        directionsLink.target = '_blank';
+        directionsLink.rel = 'noopener noreferrer';
+        directionsLink.textContent = 'Directions';
+        actions.appendChild(directionsLink);
+      }
+
+      if (place.maps_url) {
+        const mapsLink = document.createElement('a');
+        mapsLink.className = 'map-button';
+        mapsLink.href = place.maps_url;
+        mapsLink.target = '_blank';
+        mapsLink.rel = 'noopener noreferrer';
+        mapsLink.textContent = 'View on Maps';
+        actions.appendChild(mapsLink);
+      }
+
+      if (actions.children.length) {
+        card.appendChild(actions);
+      }
+
+      return card;
+    }
+
+    async function askLLM(prompt) {
+      const res = await fetch(`${API_BASE}/api/llm/places`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        const errMsg = detail?.detail ? `Request failed: ${detail.detail}` : `Request failed: ${res.status}`;
+        throw new Error(errMsg);
+      }
+      return res.json();
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const prompt = (promptField.value || '').trim();
+      if (!prompt) {
+        setFeedback('Prompt is required.');
+        return;
+      }
+
+      setFeedback('Thinking… asking the LLM for intent.');
+      resultsContainer.innerHTML = '';
+      showIntent(null);
+
+      try {
+        const data = await askLLM(prompt);
+        const places = Array.isArray(data?.places) ? data.places.slice(0, 5) : [];
+        showIntent(data?.intent ?? null);
+
+        if (!places.length) {
+          setFeedback('LLM understood the request but no matching places were found.');
+          return;
+        }
+
+        setFeedback('', false);
+
+        places.forEach((place, index) => {
+          const embed = index === 0 ? data?.embed_url || null : null;
+          const directions = index === 0 ? data?.directions_url || null : null;
+          resultsContainer.appendChild(createResultCard(place, embed, directions));
+        });
+      } catch (error) {
+        console.error(error);
+        setFeedback(error.message || 'Something went wrong while calling the LLM endpoint.');
+      }
+    });
+  </script>
+</body>
+</html>
