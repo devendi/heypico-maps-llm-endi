@@ -1,7 +1,7 @@
-Backend API ke Google Maps (Places/Directions/Embed). Semua kunci di .env (lihat .env.example).
 # HeyPico Maps Backend
 
-Backend API ke Google Maps (Places/Directions/Embed) dengan integrasi LLM lokal.
+Backend FastAPI yang menangani integrasi LLM lokal dan Google Maps API. Seluruh rahasia disimpan di
+`.env` (lihat `.env.example`).
 
 ## Konfigurasi Environment
 
@@ -13,6 +13,7 @@ Salin `.env.example` menjadi `.env` lalu isi nilai berikut:
 | `GOOGLE_MAPS_API_KEY` | API key Google Maps yang dibatasi untuk backend (aktifkan Places, Directions, Embed). |
 | `RATE_LIMIT_PER_MINUTE` | Batas rate limit per IP. Default `30`. |
 | `CACHE_TTL_SECONDS` | TTL cache hasil Places dalam detik. Default `600`. |
+| `USER_SEARCH_RADIUS_METERS` | Radius default (meter) jika user mengirim koordinat. Default `3000`. |
 
 **Rekomendasi keamanan**
 
@@ -34,10 +35,16 @@ Saat startup Anda akan melihat log pemuatan model LLM lokal dan device yang digu
 
 ## Endpoint Penting
 
-- `POST /api/llm/places` — menerima body `{ "prompt": "..." }` dan mengembalikan intent pencarian, hasil Places, `embed_url`, serta `directions_url`.
-- `GET /api/places` dan `GET /api/directions` tetap tersedia seperti sebelumnya.
+- `POST /api/llm/places` — menerima body `{ "prompt": "...", "user_lat?": float, "user_lng?": float }`
+  dan mengembalikan intent pencarian, hasil Places, `embed_url`, serta `directions_url`.
+- `GET /api/places` — proxy ke Google Places Text Search dengan parameter query manual.
+- `GET /api/directions` — menghasilkan rute Google Maps berdasarkan origin & destination.
+- `GET /api/health` — status aplikasi.
 
-## Integrasi Open WebUI
+## (Opsional) Integrasi Open WebUI
+
+> Demo utama menggunakan halaman statis `demo/index-llm.html`. Langkah berikut hanya diperlukan
+> bila Anda ingin mencoba backend melalui Open WebUI.
 
 1. Buka Open WebUI → **Settings** → **Tools** → **Add Tool**.
 2. Isi:
