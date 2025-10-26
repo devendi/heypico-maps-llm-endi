@@ -88,16 +88,19 @@
       feedback.hidden = !show;
     };
 
-    const showIntent = (intent) => {
+    const showIntent = (intent, userLoc = null) => {
       if (!intent || typeof intent !== 'object') {
         intentBox.hidden = true;
         intentBox.innerHTML = '';
         return;
       }
       intentBox.hidden = false;
+      const locationText = userLoc
+        ? `User location (${userLoc.lat.toFixed(5)}, ${userLoc.lng.toFixed(5)})`
+        : intent.location || '—';
       intentBox.innerHTML = `
         <div><strong>Query:</strong> ${intent.query || '—'}</div>
-        <div><strong>Location:</strong> ${intent.location || '—'}</div>
+        <div><strong>Location:</strong> ${locationText}</div>
         <div><strong>Radius:</strong> ${intent.radius_m ? intent.radius_m + ' m' : '—'}</div>
       `;
     };
@@ -129,18 +132,20 @@
 
     // Susun URL Google Maps Directions.
     function buildDirectionsUrl(origin, dest, placeId) {
-      if (!origin) return null;
+      if (!dest) return null;
       const base = 'https://www.google.com/maps/dir/?api=1';
       const params = new URLSearchParams({
-        origin: `${origin.lat},${origin.lng}`,
         destination: `${dest.lat},${dest.lng}`,
         travelmode: 'driving'
       });
+      if (origin) {
+        params.set('origin', `${origin.lat},${origin.lng}`);
+      }
       if (placeId) params.set('destination_place_id', placeId);
       return `${base}&${params.toString()}`;
     }
 
-    // Kartu hasil, now support jarak dan tombol Directions per item.
+    // Kartu hasil
     function createResultCard(place, embedUrl = null, directionsUrl = null, distanceKm = null) {
       const card = document.createElement('article');
       card.className = 'card';
@@ -204,11 +209,16 @@
       return card;
     }
 
-    async function askLLM(prompt) {
+    async function askLLM(prompt, userLoc) {
+      const payload = {
+        prompt,
+        user_lat: userLoc?.lat ?? null,
+        user_lng: userLoc?.lng ?? null,
+      };
       const res = await fetch(`${API_BASE}/api/llm/places`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify(payload)
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
@@ -230,13 +240,33 @@
       resultsContainer.innerHTML = '';
       showIntent(null);
 
-      // Minta lokasi user paralel dengan call LLM
-      const userLocPromise = getUserLocation();
-
       try {
-        const data = await askLLM(prompt);
-        const places = Array.isArray(data?.places) ? data.places.slice(0, 5) : [];
-        showIntent(data?.intent ?? null);
+        const userLoc = await getUserLocation();
+        const data = await askLLM(prompt, userLoc);
+        let places = Array.isArray(data?.places) ? data.places.slice() : [];
+
+        if (userLoc && Number.isFinite(userLoc.lat) && Number.isFinite(userLoc.lng)) {
+          places = places.map((place) => {
+            const destLat = Number(place.lat);
+            const destLng = Number(place.lng);
+            const hasCoords = Number.isFinite(destLat) && Number.isFinite(destLng);
+            return {
+              ...place,
+              _distanceKm: hasCoords ? haversineKm(userLoc, { lat: destLat, lng: destLng }) : null,
+              lat: hasCoords ? destLat : place.lat,
+              lng: hasCoords ? destLng : place.lng,
+            };
+          });
+
+          places.sort((a, b) => {
+            const da = typeof a._distanceKm === 'number' ? a._distanceKm : Number.POSITIVE_INFINITY;
+            const db = typeof b._distanceKm === 'number' ? b._distanceKm : Number.POSITIVE_INFINITY;
+            return da - db;
+          });
+        }
+
+        places = places.slice(0, 5);
+        showIntent(data?.intent ?? null, userLoc);
 
         if (!places.length) {
           setFeedback('LLM understood the request but no matching places were found.');
@@ -244,19 +274,22 @@
         }
 
         setFeedback('', false);
-        const userLoc = await userLocPromise; // bisa null
 
         places.forEach((place, index) => {
-          const dest = { lat: place.lat, lng: place.lng };
-          const distanceKm = userLoc ? haversineKm(userLoc, dest) : null;
+          const destLat = Number(place.lat);
+          const destLng = Number(place.lng);
+          const hasCoords = Number.isFinite(destLat) && Number.isFinite(destLng);
+          const dest = hasCoords ? { lat: destLat, lng: destLng } : null;
+          const distanceKm = typeof place._distanceKm === 'number' ? place._distanceKm : null;
 
-          // Directions: pakai dari backend untuk item pertama jika ada; selain itu bangun sendiri
-          const directions =
-            (index === 0 && data?.directions_url) ||
-            buildDirectionsUrl(userLoc, dest, place.place_id);
+          // Item pertama: pakai directions_url dari backend jika ada; kalau tidak, bangun sendiri.
+          // Item lainnya: bangun sendiri. Jika tidak ada koordinat → null.
+          const directions = hasCoords
+            ? ((index === 0 && data?.directions_url) || buildDirectionsUrl(userLoc, dest, place.place_id))
+            : null;
 
-          // Embed: tetap hanya untuk item pertama, mengikuti perilaku sebelumnya
-          const embed = index === 0 ? data?.embed_url || null : null;
+          // Embed hanya untuk item pertama
+          const embed = index === 0 ? (data?.embed_url ?? null) : null;
 
           resultsContainer.appendChild(
             createResultCard(place, embed, directions, distanceKm)
