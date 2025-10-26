@@ -150,6 +150,7 @@
       display: grid;
       gap: .75rem;
       font-size: .97rem;
+      color: darkgreen;
     }
 
     .intent[hidden] { display: none; }
@@ -286,11 +287,11 @@
     <form id="prompt-form">
       <label for="prompt">
         Tulis kebutuhan Anda
-        <span>Contoh: "Cari coffee shop nyaman untuk kerja jarak &lt; 3 km dari posisi saya"</span>
+        <span>Contoh: "Cari coffee shop nyaman untuk kerja."</span>
       </label>
       <textarea id="prompt" name="prompt" placeholder="Ceritakan kebutuhan atau rencana Anda di sini" required></textarea>
       <div class="actions-bar">
-        <p class="hint">Tips: sebutkan jenis tempat, suasana yang diinginkan, serta preferensi jarak.</p>
+        <p class="hint">Tips: sebutkan jenis tempat, suasana yang diinginkan.</p>
         <button type="submit">Tanyakan ke AI</button>
       </div>
     </form>
@@ -483,6 +484,26 @@
       return `${base}&${params.toString()}`;
     }
 
+    // Susun URL embed Google Maps dengan mode arah berkendara.
+    function buildDirectionsEmbedUrl(origin, dest) {
+      if (!origin || !dest) return null;
+      const hasOrigin = Number.isFinite(origin?.lat) && Number.isFinite(origin?.lng);
+      const hasDest = Number.isFinite(dest?.lat) && Number.isFinite(dest?.lng);
+      if (!hasOrigin || !hasDest) return null;
+
+      const params = new URLSearchParams({
+        f: 'd',
+        source: 's_d',
+        hl: 'id',
+        saddr: `${origin.lat},${origin.lng}`,
+        daddr: `${dest.lat},${dest.lng}`,
+        dirflg: 'd',
+        output: 'embed'
+      });
+
+      return `https://www.google.com/maps?${params.toString()}`;
+    }
+
     // Kartu hasil, now support jarak dan tombol Directions per item.
     function createResultCard(place, embedUrl = null, directionsUrl = null, distanceKm = null) {
       const card = document.createElement('article');
@@ -582,6 +603,12 @@
 
       try {
         const userLoc = await getUserLocation();
+
+        if (!userLoc) {
+          setFeedback('Lokasi tidak tersedia. Aktifkan izin lokasi browser Anda lalu coba lagi.');
+          return;
+        }
+
         const data = await askLLM(prompt, userLoc);
         showIntent(data?.intent ?? null, userLoc, prompt);
 
@@ -623,12 +650,14 @@
 
           // Directions: pakai dari backend untuk item pertama jika ada; selain itu bangun sendiri
           let directions = hasCoords ? buildDirectionsUrl(userLoc, dest, place.place_id) : null;
-          if (index === 0 && typeof data?.directions_url === 'string' && data.directions_url.trim()) {
+          if (!directions && index === 0 && typeof data?.directions_url === 'string' && data.directions_url.trim()) {
             directions = data.directions_url;
           }
 
-          // Embed: tetap hanya untuk item pertama, mengikuti perilaku sebelumnya
-          const embed = index === 0 ? (data?.embed_url ?? null) : null;
+          let embed = null;
+          if (index === 0) {
+            embed = buildDirectionsEmbedUrl(userLoc, dest) || data?.embed_url || null;
+          }
 
           resultsContainer.appendChild(
             createResultCard(place, embed, directions, distanceKm)

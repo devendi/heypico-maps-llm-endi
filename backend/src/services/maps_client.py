@@ -48,10 +48,13 @@ async def text_search(
         payload = response.json()
 
     status = payload.get("status")
-    if status != "OK":
+    if status not in {"OK", "ZERO_RESULTS"}:
         error_message = payload.get("error_message")
         details = f" ({error_message})" if error_message else ""
         raise MapsAPIError(f"Text search failed with status {status}{details}")
+    
+    if status == "ZERO_RESULTS":
+        return {"query": query, "places": []}
 
     places: list[dict[str, object]] = []
     for result in payload.get("results", []):
@@ -115,4 +118,5 @@ def embed_url(lat: float, lng: float, q: str) -> str:
     return (
         "https://maps.google.com/maps?"
         f"q={encoded_query}+loc:{lat},{lng}&hl=id&z=15&output=embed"
+
     )

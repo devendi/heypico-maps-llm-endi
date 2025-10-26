@@ -51,6 +51,7 @@ app.add_middleware(
 
 app.include_router(places_router)
 app.include_router(llm_places_router)
+app.include_router(directions_router)
 
 @app.get("/api/health")
 @limiter.limit(f"{rate_limit_value}/minute")
@@ -61,5 +62,5 @@ async def health(request: Request) -> Dict[str, str]:
 @app.on_event("startup")
 async def _warmup_model() -> None:  # pragma: no cover - side effect only
     ensure_model_loaded()
-
+    
 __all__ = ["app", "limiter"]

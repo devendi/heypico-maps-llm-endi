@@ -58,21 +58,12 @@ async def get_directions(
     dest_normalized = f"{dest_lat_str},{dest_lng_str}"
 
     try:
-        maps_directions(origin=origin_normalized, destination=dest_normalized)
+        directions_data = await maps_directions(
+            origin=origin_normalized, dest=dest_normalized
+        )
     except MapsAPIError as exc:  # pragma: no cover - depends on external service
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - unexpected
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal_error") from exc
 
-    params = {
-        "api": "1",
-        "origin": origin_normalized,
-        "destination": dest_normalized,
-    }
-    url = f"https://www.google.com/maps/dir/?{urlencode(params)}"
-
-    return DirectionsResponse(
-        origin=origin_normalized,
-        destination=dest_normalized,
-        directionsUrl=url,
-    )
+    return DirectionsResponse(**directions_data)
