@@ -37,6 +37,10 @@
       padding: 1rem; margin-bottom: 1.25rem; display: grid; gap: .35rem; font-size: .95rem;
     }
     .intent strong { font-weight: 600; }
+    .intent-link {
+      color: #4338ca; text-decoration: none; font-weight: 600;
+    }
+    .intent-link:hover { text-decoration: underline; }
     .results{ display: grid; gap: 1.25rem; }
     .card{
       padding: 1.1rem; border-radius: 14px; border: 1px solid rgba(15,23,42,.08);
@@ -88,21 +92,89 @@
       feedback.hidden = !show;
     };
 
+    const DISABLED_LOCATION_VALUES = new Set([
+      '', '-', '—', 'unknown', 'anywhere', 'n/a', 'not specified', 'none'
+    ]);
+
+    const buildLocationLink = (rawLocation) => {
+      if (typeof rawLocation !== 'string') return null;
+      const trimmed = rawLocation.trim();
+      if (!trimmed) return null;
+      if (DISABLED_LOCATION_VALUES.has(trimmed.toLowerCase())) return null;
+
+      const coordsMatch = trimmed.match(/(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)/);
+      const query = coordsMatch ? `${coordsMatch[1]},${coordsMatch[2]}` : trimmed;
+      const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+      return { text: trimmed, url };
+    };
+
     const showIntent = (intent, userLoc = null) => {
+      intentBox.innerHTML = '';
       if (!intent || typeof intent !== 'object') {
         intentBox.hidden = true;
-        intentBox.innerHTML = '';
         return;
       }
+
+      const makeRow = (label, value) => {
+        const row = document.createElement('div');
+        const labelNode = document.createElement('strong');
+        labelNode.textContent = `${label}:`;
+        row.appendChild(labelNode);
+        row.append(' ');
+        if (value && typeof value === 'object' && 'nodeType' in value) {
+          row.appendChild(value);
+        } else {
+          row.append(value ?? '—');
+        }
+        return row;
+      };
+
       intentBox.hidden = false;
-      const locationText = userLoc
-        ? `User location (${userLoc.lat.toFixed(5)}, ${userLoc.lng.toFixed(5)})`
-        : intent.location || '—';
-      intentBox.innerHTML = `
-        <div><strong>Query:</strong> ${intent.query || '—'}</div>
-        <div><strong>Location:</strong> ${locationText}</div>
-        <div><strong>Radius:</strong> ${intent.radius_m ? intent.radius_m + ' m' : '—'}</div>
-      `;
+
+      const queryText = typeof intent.query === 'string' && intent.query.trim()
+        ? intent.query.trim()
+        : '—';
+      intentBox.appendChild(makeRow('Query', queryText));
+
+      const locationLink = buildLocationLink(intent.location ?? '');
+      if (locationLink) {
+        const anchor = document.createElement('a');
+        anchor.className = 'intent-link';
+        anchor.href = locationLink.url;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = locationLink.text;
+        intentBox.appendChild(makeRow('Location', anchor));
+      } else {
+        const locationText = typeof intent.location === 'string' && intent.location.trim()
+          ? intent.location.trim()
+          : '—';
+        intentBox.appendChild(makeRow('Location', locationText));
+      }
+
+      const radiusValue = typeof intent.radius_m === 'number' && !Number.isNaN(intent.radius_m)
+        ? `${intent.radius_m} m`
+        : '—';
+      intentBox.appendChild(makeRow('Radius', radiusValue));
+
+      const hasUserCoords = userLoc && Number.isFinite(userLoc.lat) && Number.isFinite(userLoc.lng);
+      if (hasUserCoords) {
+        const coordsLabel = `${userLoc.lat.toFixed(5)}, ${userLoc.lng.toFixed(5)}`;
+        const userLocationLink = buildLocationLink(coordsLabel);
+        if (userLocationLink) {
+          const anchor = document.createElement('a');
+          anchor.className = 'intent-link';
+          anchor.href = userLocationLink.url;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener noreferrer';
+          anchor.textContent = coordsLabel;
+          intentBox.appendChild(makeRow('User location', anchor));
+        } else {
+          intentBox.appendChild(makeRow('User location', coordsLabel));
+        }
+      } else {
+        intentBox.appendChild(makeRow('User location', 'Not shared or unavailable'));
+      }
     };
 
     // Ambil lokasi user (timeout 10 detik). Jika gagal → null.
@@ -132,20 +204,22 @@
 
     // Susun URL Google Maps Directions.
     function buildDirectionsUrl(origin, dest, placeId) {
-      if (!dest) return null;
+      if (!dest || !Number.isFinite(dest.lat) || !Number.isFinite(dest.lng)) {
+        return null;
+      }
       const base = 'https://www.google.com/maps/dir/?api=1';
       const params = new URLSearchParams({
         destination: `${dest.lat},${dest.lng}`,
         travelmode: 'driving'
       });
-      if (origin) {
+      if (origin && Number.isFinite(origin.lat) && Number.isFinite(origin.lng)) {
         params.set('origin', `${origin.lat},${origin.lng}`);
       }
       if (placeId) params.set('destination_place_id', placeId);
       return `${base}&${params.toString()}`;
     }
 
-    // Kartu hasil
+    // Kartu hasil, now support jarak dan tombol Directions per item.
     function createResultCard(place, embedUrl = null, directionsUrl = null, distanceKm = null) {
       const card = document.createElement('article');
       card.className = 'card';
@@ -212,8 +286,8 @@
     async function askLLM(prompt, userLoc) {
       const payload = {
         prompt,
-        user_lat: userLoc?.lat ?? null,
-        user_lng: userLoc?.lng ?? null,
+        user_lat: userLoc && Number.isFinite(userLoc.lat) ? userLoc.lat : null,
+        user_lng: userLoc && Number.isFinite(userLoc.lng) ? userLoc.lng : null,
       };
       const res = await fetch(`${API_BASE}/api/llm/places`, {
         method: 'POST',
@@ -243,7 +317,16 @@
       try {
         const userLoc = await getUserLocation();
         const data = await askLLM(prompt, userLoc);
+        showIntent(data?.intent ?? null, userLoc);
+
         let places = Array.isArray(data?.places) ? data.places.slice() : [];
+
+        if (!places.length) {
+          setFeedback('LLM understood the request but no matching places were found.');
+          return;
+        }
+
+        setFeedback('', false);
 
         if (userLoc && Number.isFinite(userLoc.lat) && Number.isFinite(userLoc.lng)) {
           places = places.map((place) => {
@@ -265,30 +348,20 @@
           });
         }
 
-        places = places.slice(0, 5);
-        showIntent(data?.intent ?? null, userLoc);
-
-        if (!places.length) {
-          setFeedback('LLM understood the request but no matching places were found.');
-          return;
-        }
-
-        setFeedback('', false);
-
-        places.forEach((place, index) => {
+        places.slice(0, 5).forEach((place, index) => {
           const destLat = Number(place.lat);
           const destLng = Number(place.lng);
           const hasCoords = Number.isFinite(destLat) && Number.isFinite(destLng);
           const dest = hasCoords ? { lat: destLat, lng: destLng } : null;
           const distanceKm = typeof place._distanceKm === 'number' ? place._distanceKm : null;
 
-          // Item pertama: pakai directions_url dari backend jika ada; kalau tidak, bangun sendiri.
-          // Item lainnya: bangun sendiri. Jika tidak ada koordinat → null.
-          const directions = hasCoords
-            ? ((index === 0 && data?.directions_url) || buildDirectionsUrl(userLoc, dest, place.place_id))
-            : null;
+          // Directions: pakai dari backend untuk item pertama jika ada; selain itu bangun sendiri
+          let directions = hasCoords ? buildDirectionsUrl(userLoc, dest, place.place_id) : null;
+          if (index === 0 && typeof data?.directions_url === 'string' && data.directions_url.trim()) {
+            directions = data.directions_url;
+          }
 
-          // Embed hanya untuk item pertama
+          // Embed: tetap hanya untuk item pertama, mengikuti perilaku sebelumnya
           const embed = index === 0 ? (data?.embed_url ?? null) : null;
 
           resultsContainer.appendChild(
