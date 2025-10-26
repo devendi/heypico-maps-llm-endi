@@ -156,10 +156,17 @@ async def llm_places_endpoint(
 
     intent_query = str(intent.get("query") or "").strip()
     intent_location = str(intent.get("location") or "").strip()
-    if intent_query and intent_location:
-        search_query = f"{intent_query} near {intent_location}"
-    else:
+    if user_lat is not None and user_lng is not None:
+        # When we have the user's coordinates, rely on them for proximity instead
+        # of forcing the textual query to include an explicit location. This avoids
+        # mixing prompts like "near Senopati" with the actual user location which
+        # can lead to confusing or incorrect results around the wrong area.
         search_query = intent_query or intent_location or payload.prompt.strip()
+    else:
+        if intent_query and intent_location:
+            search_query = f"{intent_query} near {intent_location}"
+        else:
+            search_query = intent_query or intent_location or payload.prompt.strip()
 
     try:
         if user_lat is not None and user_lng is not None:
